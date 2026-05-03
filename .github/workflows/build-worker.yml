@@ -2,16 +2,9 @@ name: Web2APK Build Worker
 
 on:
   workflow_dispatch:
-    inputs:
-      force_run:
-        description: 'Force run worker'
-        required: false
-        default: 'false'
   schedule:
-    # Keep alive every 5 minutes
     - cron: '*/5 * * * *'
 
-# Concurrency control - hanya 1 job worker berjalan
 concurrency:
   group: web2apk-worker
   cancel-in-progress: false
@@ -32,7 +25,9 @@ jobs:
           cache: 'npm'
       
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm init -y
+          npm install axios fs-extra adm-zip form-data
       
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -50,10 +45,8 @@ jobs:
           unzip -q /tmp/cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
           mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
           
-          # Accept licenses
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
           
-          # Install required SDK components
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
             "platforms;android-34" \
             "build-tools;34.0.0" \
@@ -63,12 +56,18 @@ jobs:
         env:
           ANDROID_HOME: /opt/android-sdk
       
-      - name: Setup Flutter (optional)
-        if: github.event.inputs.project-type == 'flutter'
+      - name: Setup Flutter
         run: |
           git clone https://github.com/flutter/flutter.git --depth 1 -b stable /opt/flutter
           echo "/opt/flutter/bin" >> $GITHUB_PATH
           flutter precache --android
+          flutter doctor
+      
+      - name: Create worker script
+        run: |
+          cat > worker.js << 'EOF'
+          // Worker script content here (copy from worker-full.js above)
+          EOF
       
       - name: Run Worker
         run: node worker.js
@@ -76,10 +75,10 @@ jobs:
           MASTER_URL: ${{ secrets.MASTER_URL }}
           WORKER_ID: ${{ github.run_id }}-${{ github.run_number }}
           WORKER_TYPE: github
-          NODE_NO_WARNINGS: 1
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         continue-on-error: false
       
-      - name: Keep Alive (prevent zombie)
+      - name: Keep Alive
         if: always()
         run: |
           echo "Worker completed at $(date)"
