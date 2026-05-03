@@ -1,1 +1,86 @@
+name: Web2APK Build Worker
 
+on:
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: 'Force run worker'
+        required: false
+        default: 'false'
+  schedule:
+    # Keep alive every 5 minutes
+    - cron: '*/5 * * * *'
+
+# Concurrency control - hanya 1 job worker berjalan
+concurrency:
+  group: web2apk-worker
+  cancel-in-progress: false
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      
+      - name: Setup Android SDK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget unzip
+          
+          mkdir -p $ANDROID_HOME
+          wget -q "https://dl.google.com/android/repository/commandlinetools-linux-10406996_latest.zip" -O /tmp/cmdline-tools.zip
+          unzip -q /tmp/cmdline-tools.zip -d $ANDROID_HOME/cmdline-tools
+          mv $ANDROID_HOME/cmdline-tools/cmdline-tools $ANDROID_HOME/cmdline-tools/latest
+          
+          # Accept licenses
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          
+          # Install required SDK components
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "platform-tools" || true
+          
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+        env:
+          ANDROID_HOME: /opt/android-sdk
+      
+      - name: Setup Flutter (optional)
+        if: github.event.inputs.project-type == 'flutter'
+        run: |
+          git clone https://github.com/flutter/flutter.git --depth 1 -b stable /opt/flutter
+          echo "/opt/flutter/bin" >> $GITHUB_PATH
+          flutter precache --android
+      
+      - name: Run Worker
+        run: node worker.js
+        env:
+          MASTER_URL: ${{ secrets.MASTER_URL }}
+          WORKER_ID: ${{ github.run_id }}-${{ github.run_number }}
+          WORKER_TYPE: github
+          NODE_NO_WARNINGS: 1
+        continue-on-error: false
+      
+      - name: Keep Alive (prevent zombie)
+        if: always()
+        run: |
+          echo "Worker completed at $(date)"
+          exit 0
